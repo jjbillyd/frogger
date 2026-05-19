@@ -1,0 +1,1448 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quest Stereo Photo Room</title>
+  <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+  </style>
+  <script>
+    AFRAME.registerComponent('quest-locomotion', {
+      schema: {
+        moveSpeed: { default: 1.3 },
+        turnAngle: { default: 30 },
+        deadzone: { default: 0.18 },
+        turnCooldown: { default: 280 }
+      },
+
+      init: function () {
+        this.leftStick = { x: 0, y: 0 };
+        this.rightStick = { x: 0, y: 0 };
+        this.lastTurnTime = 0;
+        this.camera = null;
+
+        const leftHand = document.querySelector('#leftHand');
+        const rightHand = document.querySelector('#rightHand');
+
+        if (leftHand) {
+          leftHand.addEventListener('thumbstickmoved', event => {
+            this.leftStick.x = event.detail.x || 0;
+            this.leftStick.y = event.detail.y || 0;
+          });
+        }
+
+        if (rightHand) {
+          rightHand.addEventListener('thumbstickmoved', event => {
+            this.rightStick.x = event.detail.x || 0;
+            this.rightStick.y = event.detail.y || 0;
+          });
+        }
+      },
+
+      tick: function (time, timeDelta) {
+        // Disable locomotion when frogger game is active
+        const gameEl = document.querySelector('[frogger-game]');
+        if (gameEl && gameEl.components['frogger-game'] && gameEl.components['frogger-game'].active) return;
+
+        const rig = this.el;
+        const scene = rig.sceneEl;
+        const seconds = timeDelta / 1000;
+        const deadzone = this.data.deadzone;
+
+        if (!this.camera) this.camera = scene.camera;
+
+        const lx = Math.abs(this.leftStick.x) > deadzone ? this.leftStick.x : 0;
+        const ly = Math.abs(this.leftStick.y) > deadzone ? this.leftStick.y : 0;
+
+        if ((lx || ly) && this.camera) {
+          const cameraDirection = new THREE.Vector3();
+          this.camera.getWorldDirection(cameraDirection);
+          cameraDirection.y = 0;
+          cameraDirection.normalize();
+
+          const rightDirection = new THREE.Vector3();
+          rightDirection.crossVectors(cameraDirection, new THREE.Vector3(0, 1, 0));
+          rightDirection.normalize();
+
+          const movement = new THREE.Vector3();
+          movement.addScaledVector(cameraDirection, -ly);
+          movement.addScaledVector(rightDirection, -lx);
+          movement.normalize().multiplyScalar(this.data.moveSpeed * seconds);
+
+          const pos = rig.object3D.position;
+          pos.add(movement);
+          pos.x = THREE.MathUtils.clamp(pos.x, -1.25, 1.25);
+          pos.z = THREE.MathUtils.clamp(pos.z, -1.25, 1.25);
+        }
+
+        const rx = Math.abs(this.rightStick.x) > 0.65 ? this.rightStick.x : 0;
+        if (rx && time - this.lastTurnTime > this.data.turnCooldown) {
+          rig.object3D.rotation.y += THREE.MathUtils.degToRad(rx > 0 ? -this.data.turnAngle : this.data.turnAngle);
+          this.lastTurnTime = time;
+        }
+      }
+    });
+
+    AFRAME.registerComponent('gallery-button', {
+      schema: { action: { default: 'next' } },
+      init: function () {
+        this.el.classList.add('clickable');
+        this.el.addEventListener('click', event => {
+          event.stopPropagation();
+          this.activate();
+        });
+        this.el.addEventListener('mouseenter', () => this.setHover(true));
+        this.el.addEventListener('mouseleave', () => this.setHover(false));
+      },
+      activate: function () {
+        const gallery = document.querySelector('#stereoGallery');
+        if (!gallery || !gallery.components['stereo-gallery']) return;
+        if (this.data.action === 'previous') gallery.components['stereo-gallery'].previous();
+        else if (this.data.action === 'swap') gallery.components['stereo-gallery'].toggleSwapCurrent();
+        else if (this.data.action === 'download') gallery.components['stereo-gallery'].downloadManifestWithSwaps();
+        else if (this.data.action === 'backwall') this.toggleBackWall();
+        else if (this.data.action === 'refresh') window.location.reload();
+        else gallery.components['stereo-gallery'].next();
+      },
+      setHover: function (isHover) {
+        const plane = this.el.querySelector('.button-bg');
+        if (plane) plane.setAttribute('color', isHover ? '#facc15' : '#f8fafc');
+      },
+
+      toggleBackWall: function () {
+        const wall = document.querySelector('#backWall');
+        const knob = document.querySelector('#backWallSwitchKnob');
+        const label = document.querySelector('#backWallSwitchLabel');
+        const hideables = document.querySelectorAll('.hide-when-blackout');
+        const gallery = document.querySelector('#stereoGallery');
+        const roomSurfaces = document.querySelectorAll('.room-surface');
+        const plinth = document.querySelector('#plinth');
+        const plinthParts = document.querySelectorAll('.plinth-part');
+        if (!wall) return;
+
+        const isBlackout = wall.getAttribute('data-black-wall') === 'true';
+        const nextBlackout = !isBlackout;
+        wall.setAttribute('data-black-wall', nextBlackout ? 'true' : 'false');
+
+        roomSurfaces.forEach(el => {
+          const normalColor = el.getAttribute('data-normal-color') || el.getAttribute('color') || '#ffffff';
+          const darkColor = el.id === 'backWall' ? '#000000' : '#1a1a1a';
+          const targetColor = nextBlackout ? darkColor : normalColor;
+          el.setAttribute('animation__blackoutcolor', {
+            property: 'material.color',
+            to: targetColor,
+            dur: 500,
+            easing: 'easeInOutQuad'
+          });
+        });
+
+        const grid = document.querySelector('#floorGrid');
+        if (grid) {
+          grid.setAttribute('animation__gridfade', {
+            property: 'opacity',
+            to: nextBlackout ? 0 : 0.25,
+            dur: 500,
+            easing: 'easeInOutQuad'
+          });
+        }
+
+        hideables.forEach(el => el.setAttribute('visible', nextBlackout ? 'false' : 'true'));
+
+        if (plinth) {
+          plinth.setAttribute('animation__sinkrise', {
+            property: 'position',
+            to: nextBlackout ? '0 -0.97 0' : '0 0 0',
+            dur: 2000,
+            easing: 'easeInOutQuad'
+          });
+        }
+
+        plinthParts.forEach(el => {
+          const normalColor = el.getAttribute('data-normal-color') || el.getAttribute('color') || '#7c6f62';
+          el.setAttribute('animation__plinthcolor', {
+            property: 'material.color',
+            to: nextBlackout ? '#1a1a1a' : normalColor,
+            dur: 500,
+            easing: 'easeInOutQuad'
+          });
+        });
+
+        if (gallery && gallery.components['stereo-gallery']) {
+          gallery.components['stereo-gallery'].setBlackout(nextBlackout);
+        }
+
+        if (knob) {
+          knob.setAttribute('animation__switchslide', {
+            property: 'position',
+            to: nextBlackout ? '0.09 0 0.035' : '-0.09 0 0.035',
+            dur: 500,
+            easing: 'easeInOutQuad'
+          });
+          knob.setAttribute('animation__switchcolor', {
+            property: 'material.color',
+            to: nextBlackout ? '#111827' : '#facc15',
+            dur: 500,
+            easing: 'easeInOutQuad'
+          });
+        }
+        if (label) {
+          label.setAttribute('value', nextBlackout ? 'lights: off' : 'lights: on');
+          label.setAttribute('color', nextBlackout ? '#ffffff' : '#111827');
+        }
+      }
+    });
+
+    /* ═══════════════════════════════════════════════════════════════
+       FROGGER GAME
+       ═══════════════════════════════════════════════════════════════ */
+
+    AFRAME.registerComponent('frogger-game', {
+      schema: {
+        laneWidth: { default: 3.5 },
+        roadLanes: { default: 5 },
+        riverLanes: { default: 3 },
+        roadExtent: { default: 30 },
+        startZ: { default: -3 }
+      },
+
+      init: function () {
+        this.active = false;
+        this.vehicles = [];
+        this.logs = [];
+        this.playerLane = -1;
+        this.playerX = 0;
+        this.playerWorldX = 0;        // actual world X (tracks log drift)
+        this.lastHopTime = 0;
+        this.playerMarker = null;
+        this.dead = false;
+        this.preStart = true;
+        this.rigFollowOffset = 3;
+        this.level = 1;
+        this.onLog = false;            // true when frog is on a river lane
+        this.currentLogRef = null;     // reference to the log the frog is on
+        this.levelLabel = null;
+        this.levelStartZ = this.data.startZ;
+        this.stages = {};  // stageLevel -> { el, timers }
+
+        this.leftStick = { x: 0, y: 0 };
+        this.setupInput();
+      },
+
+      // ─── LEVEL SCALING ─────────────────────────────────────────────
+      getLevelConfigFor: function (lvl) {
+        const speedMul = 0.4 + (lvl - 1) * 0.15;   // level 1 = 0.4x, level 5 = 1.0x
+        const intervalMul = Math.max(1.8 - (lvl - 1) * 0.2, 0.6);
+        const truckChance = Math.min(0.1 + (lvl - 1) * 0.1, 0.5);
+        return { speedMul, intervalMul, truckChance };
+      },
+
+      getRoadLaneConfigsFor: function (lvl) {
+        const { speedMul, intervalMul, truckChance } = this.getLevelConfigFor(lvl);
+        const colors = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f', '#9b5de5'];
+        const configs = [];
+        for (let i = 0; i < this.data.roadLanes; i++) {
+          const dir = (i % 2 === 0) ? 1 : -1;
+          const isTruck = Math.random() < truckChance;
+          const baseSpeed = 2.0 + Math.random() * 2.5;
+          configs.push({
+            dir,
+            speed: baseSpeed * speedMul,
+            type: isTruck ? 'truck' : 'car',
+            interval: (isTruck ? 6000 : 4000) * intervalMul,
+            color: colors[i % colors.length]
+          });
+        }
+        return configs;
+      },
+
+      getRiverLaneConfigsFor: function (lvl) {
+        const { speedMul } = this.getLevelConfigFor(lvl);
+        const configs = [];
+        for (let i = 0; i < this.data.riverLanes; i++) {
+          const dir = (i % 2 === 0) ? 1 : -1;
+          const baseSpeed = 1.5 + Math.random() * 1.5;
+          const speed = baseSpeed * speedMul;
+          // Logs shrink at higher levels
+          const maxLog = Math.max(5, 11 - (lvl - 1) * 0.8);
+          const minLog = Math.max(3, 7 - (lvl - 1) * 0.6);
+          const logLength = minLog + Math.random() * (maxLog - minLog);
+          // Gap between logs grows with level
+          const desiredGap = 5 + (lvl - 1) * 1.2;
+          const spacing = logLength + desiredGap;
+          const interval = (spacing / speed) * 1000;
+          configs.push({ dir, speed, interval, logLength });
+        }
+        return configs;
+      },
+
+      // ─── ZONE HELPERS ───────────────────────────────────────────────
+      // Layout: start safe → road lanes → mid safe → river lanes → goal safe
+      totalLanes: function () {
+        return this.data.roadLanes + this.data.riverLanes + 2; // +2 for mid safe + goal
+      },
+
+      levelDepth: function () {
+        return this.totalLanes() * this.data.laneWidth;
+      },
+
+      getStageStartZ: function (stageLevel) {
+        return this.data.startZ - (stageLevel - 1) * this.levelDepth();
+      },
+
+      isRoadLane: function (lane) {
+        return lane >= 1 && lane <= this.data.roadLanes;
+      },
+
+      isMidSafe: function (lane) {
+        return lane === this.data.roadLanes + 1;
+      },
+
+      isRiverLane: function (lane) {
+        const first = this.data.roadLanes + 2;
+        return lane >= first && lane <= first + this.data.riverLanes - 1;
+      },
+
+      riverLaneIndex: function (lane) {
+        return lane - (this.data.roadLanes + 2);
+      },
+
+      isGoalLane: function (lane) {
+        return lane >= this.data.roadLanes + this.data.riverLanes + 2;
+      },
+
+      // ─── INPUT ──────────────────────────────────────────────────────
+      setupInput: function () {
+        const leftHand = document.querySelector('#leftHand');
+        if (leftHand) {
+          leftHand.addEventListener('thumbstickmoved', event => {
+            if (!this.active) return;
+            this.leftStick.x = event.detail.x || 0;
+            this.leftStick.y = event.detail.y || 0;
+          });
+        }
+        window.addEventListener('keydown', e => {
+          if (!this.active) return;
+          const now = performance.now();
+          if (now - this.lastHopTime < 350) return;
+          if (e.key === 'ArrowUp') this.hop(0, -1);
+          else if (e.key === 'ArrowDown') this.hop(0, 1);
+          else if (e.key === 'ArrowLeft') this.hop(-1, 0);
+          else if (e.key === 'ArrowRight') this.hop(1, 0);
+        });
+      },
+
+      // ─── START / LEVELS ─────────────────────────────────────────────
+      startGame: function () {
+        if (this.active) return;
+        this.active = true;
+        this.dead = false;
+        this.preStart = true;
+        this.playerLane = -1;
+        this.playerX = 0;
+        this.playerWorldX = 0;
+        this.onLog = false;
+        this.currentLogRef = null;
+        this.level = 1;
+        this.levelStartZ = this.data.startZ;
+
+        const rig = document.querySelector('#rig');
+        if (rig) {
+          this.spawnX = rig.object3D.position.x;
+          this.spawnZ = rig.object3D.position.z;
+          rig.object3D.rotation.set(0, 0, 0);
+        } else {
+          this.spawnX = 0;
+          this.spawnZ = 0;
+        }
+
+        this.animateWallsAway();
+        setTimeout(() => {
+          this.buildStage(1);
+          this.buildStage(2);
+          if (!this.playerMarker) this.createPlayerMarker();
+          this.updatePlayerPosition();
+          this.showLevelLabel();
+        }, 600);
+      },
+
+      buildStage: function (stageLevel) {
+        if (this.stages[stageLevel]) return; // already built
+        const scene = this.el.sceneEl;
+        const el = document.createElement('a-entity');
+        el.setAttribute('id', 'froggerStage-' + stageLevel);
+        scene.appendChild(el);
+
+        const sz = this.getStageStartZ(stageLevel);
+        const roadConfigs = this.getRoadLaneConfigsFor(stageLevel);
+        const riverConfigs = this.getRiverLaneConfigsFor(stageLevel);
+
+        // Register stage BEFORE spawning so spawn methods can find it
+        const stageObj = { el, timers: [], roadConfigs, riverConfigs };
+        this.stages[stageLevel] = stageObj;
+
+        this.createStageWorld(el, sz);
+        stageObj.timers = this.startStageSpawning(stageLevel, sz, roadConfigs, riverConfigs);
+      },
+
+      removeStage: function (stageLevel) {
+        const stage = this.stages[stageLevel];
+        if (!stage) return;
+        stage.timers.forEach(t => clearInterval(t));
+        if (stage.el && stage.el.parentNode) stage.el.parentNode.removeChild(stage.el);
+        // Remove vehicles/logs belonging to this stage
+        this.vehicles = this.vehicles.filter(v => {
+          if (v.stageLevel === stageLevel) { if (v.el.parentNode) v.el.parentNode.removeChild(v.el); return false; }
+          return true;
+        });
+        this.logs = this.logs.filter(l => {
+          if (l.stageLevel === stageLevel) { if (l.el.parentNode) l.el.parentNode.removeChild(l.el); return false; }
+          return true;
+        });
+        delete this.stages[stageLevel];
+      },
+
+      clearAllStages: function () {
+        Object.keys(this.stages).forEach(k => this.removeStage(parseInt(k)));
+        this.vehicles = [];
+        this.logs = [];
+      },
+
+      showLevelLabel: function () {
+        if (this.levelLabel) {
+          this.levelLabel.parentNode.removeChild(this.levelLabel);
+        }
+        const label = document.createElement('a-text');
+        label.setAttribute('value', `LEVEL ${this.level}`);
+        label.setAttribute('color', '#fbbf24');
+        label.setAttribute('align', 'center');
+        label.setAttribute('width', '8');
+        const pos = this.getFrogWorldPos();
+        label.setAttribute('position', `${pos.x} 2.5 ${pos.z - 3}`);
+        this.el.sceneEl.appendChild(label);
+        this.levelLabel = label;
+        setTimeout(() => {
+          if (this.levelLabel) {
+            this.levelLabel.setAttribute('animation__fade', {
+              property: 'opacity', to: 0, dur: 1500, easing: 'easeInQuad'
+            });
+            setTimeout(() => {
+              if (this.levelLabel && this.levelLabel.parentNode) {
+                this.levelLabel.parentNode.removeChild(this.levelLabel);
+                this.levelLabel = null;
+              }
+            }, 1600);
+          }
+        }, 2000);
+      },
+
+      // ─── WALL ANIMATION ────────────────────────────────────────────
+      animateWallsAway: function () {
+        const backWall = document.querySelector('#backWall');
+        if (backWall) {
+          backWall.setAttribute('animation__recede', { property: 'position', to: '0 1.5 -25', dur: 1800, easing: 'easeInOutQuad' });
+          backWall.setAttribute('animation__fade', { property: 'material.opacity', to: 0, dur: 1800, easing: 'easeInOutQuad' });
+        }
+        const ceiling = document.querySelector('[position="0 3 0"]');
+        if (ceiling) {
+          ceiling.setAttribute('animation__rise', { property: 'position', to: '0 12 0', dur: 1800, easing: 'easeInOutQuad' });
+          ceiling.setAttribute('animation__ceilfade', { property: 'material.opacity', to: 0, dur: 1800, easing: 'easeInOutQuad' });
+        }
+        const leftWall = document.querySelector('[position="-1.5 1.5 0"]');
+        const rightWall = document.querySelector('[position="1.5 1.5 0"]');
+        if (leftWall) {
+          leftWall.setAttribute('animation__spread', { property: 'position', to: '-18 1.5 0', dur: 1800, easing: 'easeInOutQuad' });
+          leftWall.setAttribute('animation__lwfade', { property: 'material.opacity', to: 0, dur: 1800, easing: 'easeInOutQuad' });
+        }
+        if (rightWall) {
+          rightWall.setAttribute('animation__spread', { property: 'position', to: '18 1.5 0', dur: 1800, easing: 'easeInOutQuad' });
+          rightWall.setAttribute('animation__rwfade', { property: 'material.opacity', to: 0, dur: 1800, easing: 'easeInOutQuad' });
+        }
+        const frontWall = document.querySelector('[position="0 1.5 1.5"]');
+        if (frontWall) {
+          frontWall.setAttribute('animation__frontrecede', { property: 'position', to: '0 1.5 10', dur: 1800, easing: 'easeInOutQuad' });
+          frontWall.setAttribute('animation__frontfade', { property: 'material.opacity', to: 0, dur: 1800, easing: 'easeInOutQuad' });
+        }
+        document.querySelectorAll('.hide-when-blackout').forEach(el => el.setAttribute('visible', 'false'));
+        const gallery = document.querySelector('#stereoGallery');
+        if (gallery) gallery.setAttribute('visible', 'false');
+        const plinth = document.querySelector('#plinth');
+        if (plinth) plinth.setAttribute('visible', 'false');
+        const status = document.querySelector('#galleryStatus');
+        if (status) status.setAttribute('visible', 'false');
+        const grid = document.querySelector('#floorGrid');
+        if (grid) grid.setAttribute('visible', 'false');
+
+        const floor = document.querySelector('.room-surface[rotation="-90 0 0"]');
+        if (floor) {
+          floor.setAttribute('animation__darken', { property: 'material.color', to: '#222222', dur: 800, easing: 'easeInOutQuad' });
+          floor.setAttribute('width', '60');
+          floor.setAttribute('height', '60');
+        }
+        this.el.sceneEl.setAttribute('background', 'color: #0a0a1a');
+      },
+
+      // ─── WORLD BUILDING ────────────────────────────────────────────
+      createStageWorld: function (parent, startZ) {
+        const lw = this.data.laneWidth;
+        const roadWidth = this.data.roadExtent * 2;
+        const rl = this.data.roadLanes;
+        const rivl = this.data.riverLanes;
+
+        // Road surface
+        const roadDepth = lw * rl;
+        const roadCenterZ = startZ - lw / 2 - roadDepth / 2;
+        this.addPlane(parent, 0, 0.005, roadCenterZ, roadWidth, roadDepth + lw, '#111111');
+
+        // Dashed lines between road lanes
+        for (let i = 0; i <= rl; i++) {
+          this.createDashedLine(parent, startZ - i * lw, roadWidth);
+        }
+
+        // Start safe zone
+        const startSafeZ = startZ + lw * 0.3;
+        this.addPlane(parent, 0, 0.006, startSafeZ, roadWidth, lw * 0.6, '#1a3a1a');
+        this.addPlants(parent, startSafeZ, roadWidth);
+
+        // Mid safe green strip (between road and river)
+        const midZ = startZ - (rl + 0.5) * lw;
+        this.addPlane(parent, 0, 0.006, midZ, roadWidth, lw, '#1a3a1a');
+        this.addPlants(parent, midZ, roadWidth);
+
+        // River surface
+        const riverStartZ = startZ - (rl + 1) * lw;
+        const riverDepth = lw * rivl;
+        const riverCenterZ = riverStartZ - riverDepth / 2;
+        this.addPlane(parent, 0, 0.003, riverCenterZ, roadWidth, riverDepth + lw * 0.5, '#1a3d5c');
+
+        // Goal safe zone
+        const goalZ = startZ - (rl + 1 + rivl + 0.5) * lw;
+        this.addPlane(parent, 0, 0.006, goalZ, roadWidth, lw, '#1a3a1a');
+        this.addPlants(parent, goalZ, roadWidth);
+      },
+
+      addPlane: function (parent, x, y, z, w, h, color) {
+        const p = document.createElement('a-plane');
+        p.setAttribute('position', `${x} ${y} ${z}`);
+        p.setAttribute('rotation', '-90 0 0');
+        p.setAttribute('width', w);
+        p.setAttribute('height', h);
+        p.setAttribute('color', color);
+        p.setAttribute('roughness', '1');
+        parent.appendChild(p);
+      },
+
+      addPlants: function (parent, z, roadWidth) {
+        const plantColors = ['#2d6a2d', '#3a8a3a', '#1e5e1e', '#4a9a4a'];
+        const spacing = 4;
+        const halfW = roadWidth / 2;
+        for (let x = -halfW + 2; x < halfW - 2; x += spacing) {
+          // Slight random offset so they don't look gridded
+          const px = x + (Math.random() - 0.5) * 2;
+          const pz = z + (Math.random() - 0.5) * 1.2;
+          const color = plantColors[Math.floor(Math.random() * plantColors.length)];
+          const h = 0.3 + Math.random() * 0.4;
+          const r = 0.15 + Math.random() * 0.1;
+
+          const plant = document.createElement('a-cone');
+          plant.setAttribute('radius-bottom', r);
+          plant.setAttribute('radius-top', '0');
+          plant.setAttribute('height', h);
+          plant.setAttribute('color', color);
+          plant.setAttribute('position', `${px} ${h / 2} ${pz}`);
+          plant.setAttribute('roughness', '1');
+          parent.appendChild(plant);
+        }
+      },
+
+      createDashedLine: function (parent, z, totalWidth) {
+        const dashLength = 1.5;
+        const gapLength = 1.0;
+        const stride = dashLength + gapLength;
+        const count = Math.ceil(totalWidth / stride);
+        for (let i = -count / 2; i < count / 2; i++) {
+          const dash = document.createElement('a-plane');
+          dash.setAttribute('position', `${i * stride} 0.008 ${z}`);
+          dash.setAttribute('rotation', '-90 0 0');
+          dash.setAttribute('width', dashLength);
+          dash.setAttribute('height', '0.15');
+          dash.setAttribute('color', '#ffffff');
+          dash.setAttribute('roughness', '1');
+          parent.appendChild(dash);
+        }
+      },
+
+      // ─── PLAYER MARKER ─────────────────────────────────────────────
+      createPlayerMarker: function () {
+        const scene = this.el.sceneEl;
+        const marker = document.createElement('a-entity');
+        marker.setAttribute('id', 'frogPlayer');
+
+        const body = document.createElement('a-box');
+        body.setAttribute('width', '0.8'); body.setAttribute('height', '0.6');
+        body.setAttribute('depth', '0.8'); body.setAttribute('color', '#22c55e');
+        body.setAttribute('position', '0 0.35 0');
+        marker.appendChild(body);
+
+        const eyeL = document.createElement('a-box');
+        eyeL.setAttribute('width', '0.25'); eyeL.setAttribute('height', '0.25');
+        eyeL.setAttribute('depth', '0.15'); eyeL.setAttribute('color', '#ffffff');
+        eyeL.setAttribute('position', '-0.2 0.6 -0.35');
+        marker.appendChild(eyeL);
+
+        const eyeR = document.createElement('a-box');
+        eyeR.setAttribute('width', '0.25'); eyeR.setAttribute('height', '0.25');
+        eyeR.setAttribute('depth', '0.15'); eyeR.setAttribute('color', '#ffffff');
+        eyeR.setAttribute('position', '0.2 0.6 -0.35');
+        marker.appendChild(eyeR);
+
+        const pupilL = document.createElement('a-box');
+        pupilL.setAttribute('width', '0.12'); pupilL.setAttribute('height', '0.12');
+        pupilL.setAttribute('depth', '0.05'); pupilL.setAttribute('color', '#000000');
+        pupilL.setAttribute('position', '-0.2 0.6 -0.44');
+        marker.appendChild(pupilL);
+
+        const pupilR = document.createElement('a-box');
+        pupilR.setAttribute('width', '0.12'); pupilR.setAttribute('height', '0.12');
+        pupilR.setAttribute('depth', '0.05'); pupilR.setAttribute('color', '#000000');
+        pupilR.setAttribute('position', '0.2 0.6 -0.44');
+        marker.appendChild(pupilR);
+
+        scene.appendChild(marker);
+        this.playerMarker = marker;
+      },
+
+      // ─── POSITION HELPERS ──────────────────────────────────────────
+      laneToZ: function (lane) {
+        return this.levelStartZ - (lane - 0.5) * this.data.laneWidth;
+      },
+
+      getFrogWorldPos: function () {
+        if (this.preStart) {
+          return { x: this.spawnX || 0, y: 0.01, z: this.spawnZ || 0 };
+        }
+        const y = this.onLog ? 0.65 : 0.01;  // sit on top of the log
+        return { x: this.playerWorldX, y, z: this.laneToZ(this.playerLane) };
+      },
+
+      updatePlayerPosition: function (marker) {
+        const m = marker || this.playerMarker;
+        if (!m) return;
+        const pos = this.getFrogWorldPos();
+        m.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+        this.moveRigBehindFrog(false);
+      },
+
+      moveRigBehindFrog: function (animate) {
+        const rig = document.querySelector('#rig');
+        if (!rig) return;
+        const pos = this.getFrogWorldPos();
+        const targetX = pos.x;
+        const targetZ = pos.z + this.rigFollowOffset;
+        if (animate) {
+          rig.setAttribute('animation__followfrog', {
+            property: 'position', to: `${targetX} 0 ${targetZ}`,
+            dur: 300, easing: 'easeOutQuad'
+          });
+        } else {
+          rig.object3D.position.set(targetX, 0, targetZ);
+        }
+      },
+
+      // ─── HOP ───────────────────────────────────────────────────────
+      hop: function (dx, dz) {
+        if (this.dead) return;
+        const now = performance.now();
+        if (now - this.lastHopTime < 350) return;
+        this.lastHopTime = now;
+
+        if (this.preStart) {
+          if (dz >= 0) return;
+          this.preStart = false;
+          this.playerLane = 0;
+          this.playerWorldX = 0;
+          this.onLog = false;
+          this.currentLogRef = null;
+        } else {
+          const newLane = this.playerLane + (-dz);
+          const newX = this.playerWorldX + dx * 2;
+          const maxLane = this.data.roadLanes + this.data.riverLanes + 2;
+          if (newLane < 0 || newLane > maxLane) return;
+          if (Math.abs(newX) > 14) return;
+          this.playerLane = newLane;
+          this.playerWorldX = newX;
+        }
+
+        // Determine if on river
+        this.onLog = false;
+        this.currentLogRef = null;
+        if (this.isRiverLane(this.playerLane)) {
+          // Check if landing on a log
+          const logRef = this.findLogAtPosition(this.playerLane, this.playerWorldX);
+          if (logRef) {
+            this.onLog = true;
+            this.currentLogRef = logRef;
+          } else {
+            // Fell in the river
+            this.playerHit();
+            return;
+          }
+        }
+
+        // Animate hop
+        const pos = this.getFrogWorldPos();
+        if (this.playerMarker) {
+          this.playerMarker.setAttribute('animation__hop', {
+            property: 'position', to: `${pos.x} ${pos.y} ${pos.z}`,
+            dur: 200, easing: 'easeOutQuad'
+          });
+          this.playerMarker.setAttribute('animation__jump', {
+            property: 'scale', from: '1 0.7 1', to: '1 1 1',
+            dur: 200, easing: 'easeOutBack'
+          });
+        }
+        this.moveRigBehindFrog(true);
+
+        // Check win (reached goal)
+        if (this.isGoalLane(this.playerLane)) {
+          this.winLevel();
+        }
+      },
+
+      findLogAtPosition: function (lane, worldX) {
+        const rIdx = this.riverLaneIndex(lane);
+        for (const log of this.logs) {
+          if (log.stageLevel !== this.level) continue;
+          if (log.laneIdx !== rIdx) continue;
+          const halfLen = log.length / 2;
+          if (worldX >= log.x - halfLen && worldX <= log.x + halfLen) {
+            return log;
+          }
+        }
+        return null;
+      },
+
+      // ─── SPAWNING ──────────────────────────────────────────────────
+      startStageSpawning: function (stageLevel, stageStartZ, roadConfigs, riverConfigs) {
+        const timers = [];
+        const extent = this.data.roadExtent;
+
+        roadConfigs.forEach((config, i) => {
+          this.prePopulateLane(i, config, 'vehicle', stageStartZ, stageLevel);
+          const timer = setInterval(() => {
+            if (!this.active || this.dead) return;
+            const startX = config.dir > 0 ? -extent : extent;
+            this.spawnVehicleAt(i, config, startX, stageStartZ, stageLevel);
+          }, config.interval);
+          timers.push(timer);
+        });
+
+        riverConfigs.forEach((config, i) => {
+          this.prePopulateLane(i, config, 'log', stageStartZ, stageLevel);
+          const timer = setInterval(() => {
+            if (!this.active || this.dead) return;
+            const startX = config.dir > 0 ? -extent : extent;
+            this.spawnLogAt(i, config, startX, stageStartZ, stageLevel);
+          }, config.interval);
+          timers.push(timer);
+        });
+
+        return timers;
+      },
+
+      prePopulateLane: function (laneIdx, config, type, stageStartZ, stageLevel) {
+        const extent = this.data.roadExtent;
+        const spacing = config.interval * config.speed / 1000;
+        const count = Math.floor((extent * 2) / spacing);
+        for (let n = 0; n < count; n++) {
+          const offset = -extent + n * spacing + Math.random() * spacing * 0.3;
+          if (type === 'log') {
+            this.spawnLogAt(laneIdx, config, offset, stageStartZ, stageLevel);
+          } else {
+            this.spawnVehicleAt(laneIdx, config, offset, stageStartZ, stageLevel);
+          }
+        }
+      },
+
+      spawnVehicleAt: function (laneIndex, config, xPos, stageStartZ, stageLevel) {
+        const stage = this.stages[stageLevel];
+        if (!stage || !stage.el) return;
+        const lw = this.data.laneWidth;
+        const laneZ = stageStartZ - (laneIndex + 0.5) * lw;
+        const vehicle = document.createElement('a-entity');
+        vehicle.setAttribute('class', 'frogger-vehicle');
+        if (config.type === 'truck') this.buildTruck(vehicle, config.color);
+        else this.buildCar(vehicle, config.color);
+        vehicle.setAttribute('position', `${xPos} 0.01 ${laneZ}`);
+        stage.el.appendChild(vehicle);
+        this.vehicles.push({
+          el: vehicle, x: xPos, z: laneZ, dir: config.dir,
+          speed: config.speed, lane: laneIndex, width: config.type === 'truck' ? 8 : 4,
+          stageLevel
+        });
+      },
+
+      spawnLogAt: function (laneIdx, config, xPos, stageStartZ, stageLevel) {
+        const stage = this.stages[stageLevel];
+        if (!stage || !stage.el) return;
+        const lw = this.data.laneWidth;
+        const rl = this.data.roadLanes;
+        const laneZ = stageStartZ - (rl + 1 + laneIdx + 0.5) * lw;
+        const logLen = config.logLength;
+
+        const logEl = document.createElement('a-entity');
+        const trunk = document.createElement('a-box');
+        trunk.setAttribute('width', logLen);
+        trunk.setAttribute('height', '0.6');
+        trunk.setAttribute('depth', '1.8');
+        trunk.setAttribute('color', '#6b3e26');
+        trunk.setAttribute('position', '0 0.3 0');
+        logEl.appendChild(trunk);
+        const ring1 = document.createElement('a-box');
+        ring1.setAttribute('width', '0.3'); ring1.setAttribute('height', '0.62');
+        ring1.setAttribute('depth', '1.82'); ring1.setAttribute('color', '#4a2c17');
+        ring1.setAttribute('position', `${-logLen * 0.3} 0.3 0`);
+        logEl.appendChild(ring1);
+        const ring2 = document.createElement('a-box');
+        ring2.setAttribute('width', '0.3'); ring2.setAttribute('height', '0.62');
+        ring2.setAttribute('depth', '1.82'); ring2.setAttribute('color', '#4a2c17');
+        ring2.setAttribute('position', `${logLen * 0.3} 0.3 0`);
+        logEl.appendChild(ring2);
+
+        logEl.setAttribute('position', `${xPos} 0.01 ${laneZ}`);
+        stage.el.appendChild(logEl);
+        this.logs.push({
+          el: logEl, x: xPos, z: laneZ, dir: config.dir,
+          speed: config.speed, laneIdx, length: logLen, stageLevel
+        });
+      },
+
+      // ─── VEHICLE BUILDERS ──────────────────────────────────────────
+      buildCar: function (entity, color) {
+        const body = document.createElement('a-box');
+        body.setAttribute('width', '3.5'); body.setAttribute('height', '1.2');
+        body.setAttribute('depth', '1.8'); body.setAttribute('color', color);
+        body.setAttribute('position', '0 0.6 0');
+        entity.appendChild(body);
+        const roof = document.createElement('a-box');
+        roof.setAttribute('width', '2.0'); roof.setAttribute('height', '0.8');
+        roof.setAttribute('depth', '1.6'); roof.setAttribute('color', '#222222');
+        roof.setAttribute('position', '0.2 1.4 0');
+        entity.appendChild(roof);
+        [[-1.2,0.25,0.9],[-1.2,0.25,-0.9],[1.2,0.25,0.9],[1.2,0.25,-0.9]].forEach(p => {
+          const w = document.createElement('a-box');
+          w.setAttribute('width','0.4'); w.setAttribute('height','0.5');
+          w.setAttribute('depth','0.3'); w.setAttribute('color','#1a1a1a');
+          w.setAttribute('position', `${p[0]} ${p[1]} ${p[2]}`);
+          entity.appendChild(w);
+        });
+        const hlL = document.createElement('a-box');
+        hlL.setAttribute('width','0.1'); hlL.setAttribute('height','0.3');
+        hlL.setAttribute('depth','0.4'); hlL.setAttribute('color','#fbbf24');
+        hlL.setAttribute('position','-1.8 0.6 0.5');
+        entity.appendChild(hlL);
+        const hlR = document.createElement('a-box');
+        hlR.setAttribute('width','0.1'); hlR.setAttribute('height','0.3');
+        hlR.setAttribute('depth','0.4'); hlR.setAttribute('color','#fbbf24');
+        hlR.setAttribute('position','-1.8 0.6 -0.5');
+        entity.appendChild(hlR);
+      },
+
+      buildTruck: function (entity, color) {
+        const cab = document.createElement('a-box');
+        cab.setAttribute('width','2.5'); cab.setAttribute('height','2.2');
+        cab.setAttribute('depth','2.2'); cab.setAttribute('color', color);
+        cab.setAttribute('position','-2.5 1.1 0');
+        entity.appendChild(cab);
+        const trailer = document.createElement('a-box');
+        trailer.setAttribute('width','5.5'); trailer.setAttribute('height','2.6');
+        trailer.setAttribute('depth','2.4'); trailer.setAttribute('color','#e8e8e8');
+        trailer.setAttribute('position','1.5 1.3 0');
+        entity.appendChild(trailer);
+        const stripe = document.createElement('a-box');
+        stripe.setAttribute('width','5.5'); stripe.setAttribute('height','0.4');
+        stripe.setAttribute('depth','2.45'); stripe.setAttribute('color', color);
+        stripe.setAttribute('position','1.5 0.5 0');
+        entity.appendChild(stripe);
+        [[-3,0.35,1.15],[-3,0.35,-1.15],[0,0.35,1.15],[0,0.35,-1.15],[2.5,0.35,1.15],[2.5,0.35,-1.15]].forEach(p => {
+          const w = document.createElement('a-box');
+          w.setAttribute('width','0.6'); w.setAttribute('height','0.7');
+          w.setAttribute('depth','0.4'); w.setAttribute('color','#1a1a1a');
+          w.setAttribute('position', `${p[0]} ${p[1]} ${p[2]}`);
+          entity.appendChild(w);
+        });
+      },
+
+      // ─── TICK ──────────────────────────────────────────────────────
+      tick: function (time, timeDelta) {
+        if (!this.active || this.dead) return;
+        const seconds = timeDelta / 1000;
+        const deadzone = 0.55;
+        const now = performance.now();
+
+        // Stick hopping
+        if (now - this.lastHopTime > 350) {
+          const ly = this.leftStick.y;
+          const lx = this.leftStick.x;
+          if (Math.abs(ly) > deadzone) this.hop(0, ly > 0 ? 1 : -1);
+          else if (Math.abs(lx) > deadzone) this.hop(lx > 0 ? 1 : -1, 0);
+        }
+
+        const extent = this.data.roadExtent;
+
+        // Update vehicles
+        for (let i = this.vehicles.length - 1; i >= 0; i--) {
+          const v = this.vehicles[i];
+          v.x += v.dir * v.speed * seconds;
+          v.el.object3D.position.x = v.x;
+          if (Math.abs(v.x) > extent + 15) {
+            v.el.parentNode.removeChild(v.el);
+            this.vehicles.splice(i, 1);
+            continue;
+          }
+          // Road collision: only check vehicles from the current level
+          if (v.stageLevel === this.level && this.isRoadLane(this.playerLane) && v.lane === this.playerLane - 1) {
+            const halfV = v.width / 2;
+            if (Math.abs(v.x - this.playerWorldX) < halfV + 0.4) {
+              this.playerHit();
+            }
+          }
+        }
+
+        // Update logs
+        for (let i = this.logs.length - 1; i >= 0; i--) {
+          const log = this.logs[i];
+          log.x += log.dir * log.speed * seconds;
+          log.el.object3D.position.x = log.x;
+          if (Math.abs(log.x) > extent + 15) {
+            log.el.parentNode.removeChild(log.el);
+            this.logs.splice(i, 1);
+            // If the frog was on this log, it fell off
+            if (this.currentLogRef === log) {
+              this.currentLogRef = null;
+              this.onLog = false;
+              this.playerHit();
+            }
+            continue;
+          }
+        }
+
+        // Frog rides the log: drift with it
+        if (this.onLog && this.currentLogRef) {
+          const log = this.currentLogRef;
+          this.playerWorldX += log.dir * log.speed * seconds;
+          // Check if frog drifted off the log edges
+          const halfLen = log.length / 2;
+          if (this.playerWorldX < log.x - halfLen || this.playerWorldX > log.x + halfLen) {
+            this.onLog = false;
+            this.currentLogRef = null;
+            this.playerHit();
+            return;
+          }
+          // Check if drifted off screen
+          if (Math.abs(this.playerWorldX) > extent) {
+            this.playerHit();
+            return;
+          }
+          // Update frog and rig position smoothly
+          if (this.playerMarker) {
+            const pos = this.getFrogWorldPos();
+            this.playerMarker.object3D.position.x = pos.x;
+            this.playerMarker.object3D.position.y = pos.y;
+          }
+          // Rig follows laterally
+          const rig = document.querySelector('#rig');
+          if (rig) {
+            const pos = this.getFrogWorldPos();
+            rig.object3D.position.x = pos.x;
+          }
+        }
+      },
+
+      // ─── HIT / RESET ───────────────────────────────────────────────
+      playerHit: function () {
+        if (this.dead) return;
+        this.dead = true;
+        this.onLog = false;
+        this.currentLogRef = null;
+        if (this.playerMarker) {
+          const body = this.playerMarker.querySelector('a-box');
+          if (body) body.setAttribute('color', '#ef4444');
+          this.playerMarker.setAttribute('animation__die', {
+            property: 'scale', to: '1.5 0.1 1.5', dur: 400, easing: 'easeInQuad'
+          });
+        }
+        setTimeout(() => this.resetToLevel1(), 1500);
+      },
+
+      resetToLevel1: function () {
+        // Tear down everything and restart at level 1
+        this.clearAllStages();
+        this.level = 1;
+        this.levelStartZ = this.data.startZ;
+        this.dead = false;
+        this.playerLane = 0;
+        this.playerWorldX = 0;
+        this.onLog = false;
+        this.currentLogRef = null;
+        if (this.playerMarker) {
+          const body = this.playerMarker.querySelector('a-box');
+          if (body) body.setAttribute('color', '#22c55e');
+          this.playerMarker.setAttribute('scale', '1 1 1');
+        }
+        this.buildStage(1);
+        this.buildStage(2);
+        this.updatePlayerPosition();
+        this.showLevelLabel();
+      },
+
+      // ─── WIN LEVEL ─────────────────────────────────────────────────
+      winLevel: function () {
+        // Brief color flash
+        if (this.playerMarker) {
+          const body = this.playerMarker.querySelector('a-box');
+          if (body) {
+            body.setAttribute('color', '#fbbf24');
+            setTimeout(() => body.setAttribute('color', '#22c55e'), 500);
+          }
+        }
+        // Seamless transition — no pause, no rebuild
+        this.level++;
+        this.levelStartZ = this.getStageStartZ(this.level);
+        this.playerLane = 0;
+        this.playerWorldX = 0;
+        this.onLog = false;
+        this.currentLogRef = null;
+        // Remove old stage that's now 2 levels behind
+        this.removeStage(this.level - 2);
+        // Build the next stage ahead
+        this.buildStage(this.level + 1);
+        this.updatePlayerPosition();
+        this.showLevelLabel();
+      }
+    });
+
+    AFRAME.registerComponent('launch-frogger', {
+      init: function () {
+        this.el.classList.add('clickable');
+        this.el.addEventListener('click', () => {
+          const game = document.querySelector('[frogger-game]');
+          if (game && game.components['frogger-game']) {
+            game.components['frogger-game'].startGame();
+          }
+          // Hide all launch buttons
+          document.querySelectorAll('[launch-frogger]').forEach(el => {
+            el.setAttribute('visible', 'false');
+          });
+        });
+      }
+    });
+
+    AFRAME.registerComponent('stereo-gallery', {
+      schema: {
+        manifest: { default: 'Assets/stereo_manifest.json' },
+        width: { default: 1.35 },
+        maxHeight: { default: 0.86 },
+        eyeSeparationLayerLeft: { default: 1 },
+        eyeSeparationLayerRight: { default: 2 }
+      },
+
+      init: function () {
+        this.photos = [];
+        this.manifest = null;
+        this.index = 0;
+        this.swapByPhotoId = {};
+        this.loader = new THREE.TextureLoader();
+        this.leftMesh = null;
+        this.rightMesh = null;
+        this.fallbackMesh = null;
+        this.frameMesh = null;
+        this.ready = false;
+        this.aspect = 1.5;
+
+        this.createMeshes();
+        this.loadManifest();
+      },
+
+      createMeshes: function () {
+        const width = this.data.width;
+        const height = width / this.aspect;
+
+        const photoGeometry = new THREE.PlaneGeometry(width, height);
+        const blankMaterial = new THREE.MeshBasicMaterial({ color: 0x111827, side: THREE.DoubleSide });
+
+        this.leftMesh = new THREE.Mesh(photoGeometry, blankMaterial.clone());
+        this.rightMesh = new THREE.Mesh(photoGeometry, blankMaterial.clone());
+        this.fallbackMesh = new THREE.Mesh(photoGeometry, blankMaterial.clone());
+
+        // Eye-specific meshes. In XR, the left eye camera sees layer 1 and the right eye camera sees layer 2.
+        this.leftMesh.layers.set(this.data.eyeSeparationLayerLeft);
+        this.rightMesh.layers.set(this.data.eyeSeparationLayerRight);
+
+        // Non-XR desktop/phone preview uses the left image on normal layer 0.
+        this.fallbackMesh.layers.set(0);
+
+        this.leftMesh.position.set(0, 0, 0);
+        this.rightMesh.position.set(0, 0, 0);
+        this.fallbackMesh.position.set(0, 0, 0.002);
+
+        this.el.object3D.add(this.leftMesh);
+        this.el.object3D.add(this.rightMesh);
+        this.el.object3D.add(this.fallbackMesh);
+
+        this.createFrame(width, height);
+      },
+
+      createFrame: function (width, height) {
+        const frameGeometry = new THREE.BoxGeometry(width + 0.08, height + 0.08, 0.035);
+        const frameMaterial = new THREE.MeshStandardMaterial({ color: 0x3f2f21, roughness: 0.7 });
+        this.frameMesh = new THREE.Mesh(frameGeometry, frameMaterial);
+        this.frameMesh.position.set(0, 0, -0.025);
+        this.el.object3D.add(this.frameMesh);
+      },
+
+      resizeToTexture: function (texture) {
+        const img = texture.image;
+        if (!img || !img.width || !img.height) return;
+
+        const naturalAspect = img.width / img.height;
+        let width = this.data.width;
+        let height = width / naturalAspect;
+
+        if (height > this.data.maxHeight) {
+          height = this.data.maxHeight;
+          width = height * naturalAspect;
+        }
+
+        const geometry = new THREE.PlaneGeometry(width, height);
+        this.leftMesh.geometry.dispose();
+        this.rightMesh.geometry.dispose();
+        this.fallbackMesh.geometry.dispose();
+        this.leftMesh.geometry = geometry.clone();
+        this.rightMesh.geometry = geometry.clone();
+        this.fallbackMesh.geometry = geometry.clone();
+
+        if (this.frameMesh) {
+          this.frameMesh.geometry.dispose();
+          this.frameMesh.geometry = new THREE.BoxGeometry(width + 0.08, height + 0.08, 0.035);
+        }
+      },
+
+      loadManifest: async function () {
+        const status = document.querySelector('#galleryStatus');
+        try {
+          const response = await fetch(this.data.manifest, { cache: 'no-store' });
+          if (!response.ok) throw new Error('Could not load manifest: ' + response.status);
+          const manifest = await response.json();
+          this.manifest = manifest;
+          this.photos = manifest.photos || [];
+          if (!this.photos.length) throw new Error('Manifest contains no photos');
+          this.show(0);
+        } catch (error) {
+          console.error(error);
+          if (status) status.setAttribute('value', 'No stereo photos found\nRun the asset builder first');
+        }
+      },
+
+      show: function (nextIndex) {
+        if (!this.photos.length) return;
+        this.index = (nextIndex + this.photos.length) % this.photos.length;
+        const photo = this.photos[this.index];
+        const status = document.querySelector('#galleryStatus');
+        const photoId = photo.id || String(this.index);
+        const isSwapped = !!this.swapByPhotoId[photoId];
+        const leftUrl = isSwapped ? photo.right : photo.left;
+        const rightUrl = isSwapped ? photo.left : photo.right;
+
+        this.loadTexturePair(leftUrl, rightUrl).then(({ leftTexture, rightTexture }) => {
+          this.resizeToTexture(leftTexture);
+          this.applyTexture(this.leftMesh, leftTexture);
+          this.applyTexture(this.rightMesh, rightTexture);
+          this.applyTexture(this.fallbackMesh, leftTexture);
+          this.ready = true;
+
+          const title = photo.title || photo.id || 'stereo photo';
+          const swapLabel = isSwapped ? '\nleft/right swapped' : '';
+          if (status) status.setAttribute('value', `${this.index + 1} / ${this.photos.length}\n${title}${swapLabel}`);
+        }).catch(error => {
+          console.error(error);
+          if (status) status.setAttribute('value', 'Could not load photo pair');
+        });
+      },
+
+      loadTexturePair: function (leftUrl, rightUrl) {
+        return Promise.all([
+          this.loadTexture(leftUrl),
+          this.loadTexture(rightUrl)
+        ]).then(([leftTexture, rightTexture]) => ({ leftTexture, rightTexture }));
+      },
+
+      loadTexture: function (url) {
+        return new Promise((resolve, reject) => {
+          this.loader.load(
+            url,
+            texture => {
+              texture.colorSpace = THREE.SRGBColorSpace;
+              texture.minFilter = THREE.LinearFilter;
+              texture.magFilter = THREE.LinearFilter;
+              resolve(texture);
+            },
+            undefined,
+            reject
+          );
+        });
+      },
+
+      applyTexture: function (mesh, texture) {
+        if (mesh.material) mesh.material.dispose();
+        mesh.material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+      },
+
+      next: function () {
+        this.show(this.index + 1);
+      },
+
+      previous: function () {
+        this.show(this.index - 1);
+      },
+
+      toggleSwapCurrent: function () {
+        if (!this.photos.length) return;
+        const photo = this.photos[this.index];
+        const photoId = photo.id || String(this.index);
+        this.swapByPhotoId[photoId] = !this.swapByPhotoId[photoId];
+        this.show(this.index);
+      },
+
+      setBlackout: function (isBlackout) {
+        if (!this.frameMesh || !this.frameMesh.material) return;
+        const from = this.frameMesh.material.color.clone();
+        const to = new THREE.Color(isBlackout ? 0x000000 : 0x3f2f21);
+        const start = performance.now();
+        const duration = 500;
+
+        const animate = now => {
+          const t = Math.min(1, (now - start) / duration);
+          const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+          this.frameMesh.material.color.copy(from).lerp(to, eased);
+          if (t < 1) requestAnimationFrame(animate);
+        };
+
+        requestAnimationFrame(animate);
+      },
+
+      buildSwappedManifest: function () {
+        const baseManifest = this.manifest || { version: 1, photos: this.photos };
+        const manifest = JSON.parse(JSON.stringify(baseManifest));
+        manifest.generatedBy = 'Quest stereo room';
+        manifest.swapAppliedAt = new Date().toISOString();
+        manifest.photos = (manifest.photos || []).map((photo, i) => {
+          const photoId = photo.id || String(i);
+          if (this.swapByPhotoId[photoId]) {
+            const left = photo.left;
+            photo.left = photo.right;
+            photo.right = left;
+            photo.swapped = !photo.swapped;
+          }
+          return photo;
+        });
+        return manifest;
+      },
+
+      downloadManifestWithSwaps: function () {
+        const status = document.querySelector('#galleryStatus');
+        const manifest = this.buildSwappedManifest();
+        const json = JSON.stringify(manifest, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `stereo_manifest_swapped_${stamp}.json`;
+
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+        if (status) {
+          status.setAttribute('value', `Downloaded manifest
+${filename}`);
+        }
+      },
+
+      tick: function () {
+        // Configure the WebXR per-eye cameras so layer 1 is left eye only and layer 2 is right eye only.
+        const scene = this.el.sceneEl;
+        const renderer = scene.renderer;
+        if (!renderer || !renderer.xr) return;
+
+        const inVR = scene.is('vr-mode');
+        if (this.fallbackMesh) this.fallbackMesh.visible = !inVR;
+
+        if (!inVR) return;
+
+        const xrCamera = renderer.xr.getCamera();
+        if (!xrCamera || !xrCamera.cameras || xrCamera.cameras.length < 2) return;
+
+        const leftCamera = xrCamera.cameras[0];
+        const rightCamera = xrCamera.cameras[1];
+
+        leftCamera.layers.enable(0);
+        leftCamera.layers.enable(this.data.eyeSeparationLayerLeft);
+        leftCamera.layers.disable(this.data.eyeSeparationLayerRight);
+
+        rightCamera.layers.enable(0);
+        rightCamera.layers.enable(this.data.eyeSeparationLayerRight);
+        rightCamera.layers.disable(this.data.eyeSeparationLayerLeft);
+      }
+    });
+  </script>
+</head>
+<body>
+  <a-scene
+    renderer="antialias: true; colorManagement: true"
+    background="color: #dfe7ef"
+    vr-mode-ui="enabled: true"
+  >
+    <!-- Basic lighting -->
+    <a-entity light="type: ambient; intensity: 0.55"></a-entity>
+    <a-entity light="type: directional; intensity: 0.65" position="-1.5 3 1.5"></a-entity>
+
+    <!-- Camera rig. Left stick moves; right stick snap-turns. -->
+    <a-entity id="rig" position="0 0 0" quest-locomotion="moveSpeed: 1.3; turnAngle: 30">
+      <a-camera
+        id="camera"
+        position="0 1.6 0"
+        look-controls="pointerLockEnabled: true"
+        wasd-controls="enabled: true; acceleration: 20"
+      ></a-camera>
+
+      <a-entity
+        id="leftHand"
+        laser-controls="hand: left"
+        raycaster="objects: .clickable; far: 5"
+        cursor="rayOrigin: entity; fuse: false"
+        line="color: #7da1c4"
+      ></a-entity>
+
+      <a-entity
+        id="rightHand"
+        laser-controls="hand: right"
+        raycaster="objects: .clickable; far: 5"
+        cursor="rayOrigin: entity; fuse: false"
+        line="color: #7da1c4"
+      ></a-entity>
+    </a-entity>
+
+    <!-- Room: 3m x 3m x 3m -->
+    <a-plane class="room-surface" data-normal-color="#c9b79c" position="0 0 0" rotation="-90 0 0" width="3" height="3" color="#c9b79c" roughness="1"></a-plane>
+    <a-plane class="room-surface" data-normal-color="#f3f0e9" position="0 3 0" rotation="90 0 0" width="3" height="3" color="#f3f0e9" roughness="1" side="double"></a-plane>
+    <a-plane class="room-surface" id="backWall" data-normal-color="#d8e6f3" data-black-wall="false" position="0 1.5 -1.5" rotation="0 0 0" width="3" height="3" color="#d8e6f3" roughness="1" side="double"></a-plane>
+    <a-plane class="room-surface" data-normal-color="#d8e6f3" position="0 1.5 1.5" rotation="0 180 0" width="3" height="3" color="#d8e6f3" roughness="1" side="double"></a-plane>
+    <a-plane class="room-surface" data-normal-color="#e2edf5" position="-1.5 1.5 0" rotation="0 90 0" width="3" height="3" color="#e2edf5" roughness="1" side="double"></a-plane>
+    <a-plane class="room-surface" data-normal-color="#e2edf5" position="1.5 1.5 0" rotation="0 -90 0" width="3" height="3" color="#e2edf5" roughness="1" side="double"></a-plane>
+
+    <!-- Simple scale grid -->
+    <a-grid id="floorGrid" position="0 0.002 0" rotation="-90 0 0" width="3" height="3" color="#8d7f6b" opacity="0.25"></a-grid>
+
+    <!-- Plinth / pedestal. In blackout mode it darkens to the floor colour and sinks into the floor. -->
+    <a-entity id="plinth" position="0 0 0">
+      <a-cylinder class="plinth-part" data-normal-color="#7c6f62" position="0 0.45 -1.05" radius="0.48" height="0.9" color="#7c6f62" roughness="0.85"></a-cylinder>
+      <a-cylinder class="plinth-part" data-normal-color="#9b8a78" position="0 0.93 -1.05" radius="0.56" height="0.08" color="#9b8a78" roughness="0.85"></a-cylinder>
+    </a-entity>
+
+    <!-- Stereo photograph display above the plinth. Click to launch Frogger. -->
+    <a-entity
+      id="stereoGallery"
+      position="0 1.72 -1.42"
+      rotation="0 0 0"
+      stereo-gallery="manifest: Assets/stereo_manifest.json; width: 1.35; maxHeight: 0.86"
+      launch-frogger
+    ></a-entity>
+
+    <!-- Frogger game controller (invisible entity that manages the game) -->
+    <a-entity frogger-game></a-entity>
+
+    <!-- Gallery status label -->
+    <a-text
+      class="hide-when-blackout"
+      id="galleryStatus"
+      value="Loading stereo photos..."
+      position="0 1.08 -1.43"
+      rotation="-12 0 0"
+      width="1.2"
+      color="#f8fafc"
+      align="center"
+    ></a-text>
+
+    <!-- Play Frogger button -->
+    <a-entity position="0 0.72 -1.43" rotation="-12 0 0" launch-frogger>
+      <a-box class="button-bg clickable" width="0.9" height="0.30" depth="0.035" color="#22c55e" opacity="0.98" material="side: double"></a-box>
+      <a-text value="PLAY FROGGER" position="0 0.005 0.035" width="1.1" color="#ffffff" align="center" font="mozillavr"></a-text>
+    </a-entity>
+
+    <!-- Large floating controller targets on the plinth/back wall. These hide in blackout mode. -->
+    <a-entity class="hide-when-blackout" position="-0.34 1.12 -1.43" rotation="-12 0 0" gallery-button="action: previous">
+      <a-plane class="button-bg clickable" width="0.42" height="0.32" color="#f8fafc" opacity="0.96" material="side: double"></a-plane>
+      <a-text value="‹" position="0 0.01 0.01" width="1.4" color="#0f172a" align="center"></a-text>
+    </a-entity>
+
+    <a-entity class="hide-when-blackout" position="0.34 1.12 -1.43" rotation="-12 0 0" gallery-button="action: next">
+      <a-plane class="button-bg clickable" width="0.42" height="0.32" color="#f8fafc" opacity="0.96" material="side: double"></a-plane>
+      <a-text value="›" position="0 0.01 0.01" width="1.4" color="#0f172a" align="center"></a-text>
+    </a-entity>
+
+    <a-entity class="hide-when-blackout" position="0 0.98 -1.43" rotation="-12 0 0" gallery-button="action: swap">
+      <a-plane class="button-bg clickable" width="0.72" height="0.22" color="#f8fafc" opacity="0.96" material="side: double"></a-plane>
+      <a-text value="swap L/R" position="0 0.005 0.01" width="0.9" color="#0f172a" align="center"></a-text>
+    </a-entity>
+
+    <a-entity class="hide-when-blackout" position="0 0.86 -1.50" rotation="-18 0 0" gallery-button="action: download">
+      <a-box class="button-bg clickable" width="1.05" height="0.24" depth="0.035" color="#f8fafc" opacity="0.98" material="side: double"></a-box>
+      <a-text value="download manifest" position="0 0.005 0.035" width="0.95" color="#0f172a" align="center"></a-text>
+    </a-entity>
+
+    <!-- Light-switch style toggle on the left wall. Turning lights off leaves only the photo in colour. -->
+    <a-entity position="-1.485 1.35 -0.72" rotation="0 90 0" gallery-button="action: backwall">
+      <a-box class="button-bg clickable" width="0.46" height="0.26" depth="0.035" color="#f8fafc" opacity="0.98" material="side: double"></a-box>
+      <a-box id="backWallSwitchKnob" width="0.18" height="0.18" depth="0.045" position="-0.09 0 0.035" color="#facc15"></a-box>
+      <a-text id="backWallSwitchLabel" value="lights: on" position="0 -0.22 0.04" width="0.82" color="#111827" align="center"></a-text>
+    </a-entity>
+
+    <!-- Always-available duplicate navigation buttons on the left wall, under the light switch. -->
+    <a-entity position="-1.485 0.88 -0.90" rotation="0 90 0" gallery-button="action: previous">
+      <a-box class="button-bg clickable" width="0.38" height="0.28" depth="0.035" color="#f8fafc" opacity="0.98" material="side: double"></a-box>
+      <a-text value="‹" position="0 0.005 0.04" width="1.25" color="#0f172a" align="center"></a-text>
+    </a-entity>
+
+    <a-entity position="-1.485 0.88 -0.48" rotation="0 90 0" gallery-button="action: next">
+      <a-box class="button-bg clickable" width="0.38" height="0.28" depth="0.035" color="#f8fafc" opacity="0.98" material="side: double"></a-box>
+      <a-text value="›" position="0 0.005 0.04" width="1.25" color="#0f172a" align="center"></a-text>
+    </a-entity>
+
+    <!-- Hard refresh button, useful after replacing the manifest/assets. -->
+    <a-entity class="hide-when-blackout" position="1.22 1.18 -1.46" rotation="0 0 0" gallery-button="action: refresh">
+      <a-box class="button-bg clickable" width="0.46" height="0.26" depth="0.035" color="#f8fafc" opacity="0.98" material="side: double"></a-box>
+      <a-text value="refresh" position="0 0.005 0.04" width="0.74" color="#0f172a" align="center"></a-text>
+    </a-entity>
+
+    <a-text
+      class="hide-when-blackout"
+      value="Left stick: move\nRight stick: snap turn\nTrigger arrows: browse stereo photos"
+      position="-1.35 2.56 -1.49"
+      rotation="0 0 0"
+      width="1.7"
+      color="#334155"
+      align="left"
+    ></a-text>
+  </a-scene>
+</body>
+</html>
