@@ -523,6 +523,22 @@
         const goalZ = startZ - (rl + 1 + rivl + 0.5) * lw;
         this.addPlane(parent, 0, 0.006, goalZ, roadWidth, lw, '#1a3a1a');
         this.addPlants(parent, goalZ, roadWidth);
+
+        // Danger walls (red, 20% opacity) on left and right edges
+        const wallHeight = 6;
+        const totalDepth = (rl + rivl + 3) * lw;
+        const wallCenterZ = startZ - totalDepth / 2 + lw * 0.5;
+        const ext = this.data.roadExtent;
+        [ext, -ext].forEach(xPos => {
+          const wall = document.createElement('a-plane');
+          wall.setAttribute('position', `${xPos} ${wallHeight / 2} ${wallCenterZ}`);
+          wall.setAttribute('rotation', '0 90 0');
+          wall.setAttribute('width', totalDepth);
+          wall.setAttribute('height', wallHeight);
+          wall.setAttribute('color', '#ff0000');
+          wall.setAttribute('material', 'opacity: 0.2; transparent: true; side: double');
+          parent.appendChild(wall);
+        });
       },
 
       addPlane: function (parent, x, y, z, w, h, color) {
@@ -672,7 +688,7 @@
           const newX = this.playerWorldX + dx * 2;
           const maxLane = this.data.roadLanes + this.data.riverLanes + 2;
           if (newLane < 0 || newLane > maxLane) return;
-          if (Math.abs(newX) > 14) return;
+          if (Math.abs(newX) > this.data.roadExtent) { this.playerHit(); return; }
           this.playerLane = newLane;
           this.playerWorldX = newX;
         }
@@ -943,7 +959,7 @@
             this.playerHit();
             return;
           }
-          // Check if drifted off screen
+          // Check if drifted past danger walls
           if (Math.abs(this.playerWorldX) > extent) {
             this.playerHit();
             return;
@@ -1014,7 +1030,7 @@
         this.level++;
         this.levelStartZ = this.getStageStartZ(this.level);
         this.playerLane = 0;
-        this.playerWorldX = 0;
+        // Keep playerWorldX — don't snap sideways
         this.onLog = false;
         this.currentLogRef = null;
         // Remove old stage that's now 2 levels behind

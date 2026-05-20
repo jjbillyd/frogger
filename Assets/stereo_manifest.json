@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "generatedBy": "build_stereo_assets.py",
+  "photoCount": 1,
+  "photos": [
+    {
+      "id": "openart-image_1mBNKOlJ_1779309182485_raw",
+      "title": "openart-image 1mBNKOlJ 1779309182485 raw",
+      "left": "Assets/stereo/openart-image_1mBNKOlJ_1779309182485_raw_left.jpg",
+      "right": "Assets/stereo/openart-image_1mBNKOlJ_1779309182485_raw_right.jpg"
+    }
+  ]
+}
