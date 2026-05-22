@@ -1079,6 +1079,7 @@
         this.frameMesh = null;
         this.ready = false;
         this.aspect = 1.5;
+        this.currentVideo = null;
 
         this.createMeshes();
         this.loadManifest();
@@ -1164,6 +1165,88 @@
         }
       },
 
+      isVideoEntry: function (photo) {
+        return photo.asset && photo.asset.toLowerCase().endsWith('.mp4');
+      },
+
+      stopCurrentVideo: function () {
+        if (this.currentVideo) {
+          this.currentVideo.pause();
+          this.currentVideo.removeAttribute('src');
+          this.currentVideo.load();
+          this.currentVideo = null;
+        }
+      },
+
+      showVideo: function (photo, isSwapped) {
+        this.stopCurrentVideo();
+        const status = document.querySelector('#galleryStatus');
+
+        const video = document.createElement('video');
+        video.crossOrigin = 'anonymous';
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.src = photo.asset;
+        this.currentVideo = video;
+
+        video.addEventListener('loadeddata', () => {
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          const eyeAspect = (vw / 2) / vh;
+
+          let width = this.data.width;
+          let height = width / eyeAspect;
+          if (height > this.data.maxHeight) {
+            height = this.data.maxHeight;
+            width = height * eyeAspect;
+          }
+
+          const geometry = new THREE.PlaneGeometry(width, height);
+          this.leftMesh.geometry.dispose();
+          this.rightMesh.geometry.dispose();
+          this.fallbackMesh.geometry.dispose();
+          this.leftMesh.geometry = geometry.clone();
+          this.rightMesh.geometry = geometry.clone();
+          this.fallbackMesh.geometry = geometry.clone();
+          if (this.frameMesh) {
+            this.frameMesh.geometry.dispose();
+            this.frameMesh.geometry = new THREE.BoxGeometry(width + 0.08, height + 0.08, 0.035);
+          }
+
+          const leftHalf = isSwapped ? photo.right : photo.left;
+          const rightHalf = isSwapped ? photo.left : photo.right;
+          const leftOffset = leftHalf === 'right' ? 0.5 : 0;
+          const rightOffset = rightHalf === 'right' ? 0.5 : 0;
+
+          const makeTex = (xOffset) => {
+            const tex = new THREE.VideoTexture(video);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            tex.repeat.set(0.5, 1);
+            tex.offset.set(xOffset, 0);
+            return tex;
+          };
+
+          this.applyTexture(this.leftMesh, makeTex(leftOffset));
+          this.applyTexture(this.rightMesh, makeTex(rightOffset));
+          this.applyTexture(this.fallbackMesh, makeTex(leftOffset));
+
+          video.play();
+          this.ready = true;
+
+          const title = photo.title || photo.id || 'stereo video';
+          const swapLabel = isSwapped ? '\nleft/right swapped' : '';
+          if (status) status.setAttribute('value', `${this.index + 1} / ${this.photos.length}\n${title}${swapLabel}`);
+        });
+
+        video.addEventListener('error', () => {
+          console.error('Failed to load video:', photo.asset);
+          if (status) status.setAttribute('value', 'Could not load video');
+        });
+      },
+
       show: function (nextIndex) {
         if (!this.photos.length) return;
         this.index = (nextIndex + this.photos.length) % this.photos.length;
@@ -1171,6 +1254,13 @@
         const status = document.querySelector('#galleryStatus');
         const photoId = photo.id || String(this.index);
         const isSwapped = !!this.swapByPhotoId[photoId];
+
+        if (this.isVideoEntry(photo)) {
+          this.showVideo(photo, isSwapped);
+          return;
+        }
+
+        this.stopCurrentVideo();
         const leftUrl = isSwapped ? photo.right : photo.left;
         const rightUrl = isSwapped ? photo.left : photo.right;
 
