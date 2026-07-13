@@ -1,0 +1,15 @@
+{
+  "id": "frogger",
+  "name": "Frogger",
+  "description": "Hop across the highway and the river. Don't get squished — or eaten.",
+  "players": { "min": 1, "max": 1 },
+  "type": "aframe-module",
+  "module": "frogger.js",
+  "entry": "frogger",
+  "poster": {
+    "left": "Assets/stereo/openart-image_1mBNKOlJ_1779309182485_raw_left.jpg",
+    "right": "Assets/stereo/openart-image_1mBNKOlJ_1779309182485_raw_right.jpg"
+  },
+  "accent": "#22c55e",
+  "version": "1.0.0"
+}
